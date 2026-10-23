@@ -1,12 +1,15 @@
 import { Router } from "express";
 import { requireAdmin } from "../../middleware/auth.middleware.js";
 import {
-  adminSetReferralPlanActive,
+  adminApproveClaimRequest,
   adminCreateReferralPlan,
   adminDeleteReferralPlan,
   adminGetTokenRate,
+  adminListClaimRequests,
   adminListReferralPlans,
+  adminRejectClaimRequest,
   adminSaveTokenRate,
+  adminSetReferralPlanActive,
   adminUpdateReferralPlan,
 } from "./investment-admin.controller.js";
 
@@ -20,5 +23,8 @@ router.post("/referral-plans", adminCreateReferralPlan);
 router.put("/referral-plans/:id", adminUpdateReferralPlan);
 router.delete("/referral-plans/:id", adminDeleteReferralPlan);
 router.post("/referral-plans/:id/active", adminSetReferralPlanActive);
+router.get("/claim-requests", adminListClaimRequests);
+router.post("/claim-requests/:id/approve", adminApproveClaimRequest);
+router.post("/claim-requests/:id/reject", adminRejectClaimRequest);
 
 export default router;

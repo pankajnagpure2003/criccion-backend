@@ -28,6 +28,14 @@ const investmentSchema = new mongoose.Schema(
     },
     referralPoolUsdt: { type: Number, default: null },
     referralSettled: { type: Boolean, default: false },
+    claimStatus: { type: String, enum: [null, "pending", "approved", "rejected"], default: null },
+    claimRequestedAt: { type: Date, default: null },
+    claimPayoutMethod: { type: String, default: "", trim: true },
+    claimPayout: { type: mongoose.Schema.Types.Mixed, default: null },
+    claimNote: { type: String, default: "", trim: true },
+    claimTxHash: { type: String, default: "", trim: true },
+    claimRejectReason: { type: String, default: "", trim: true },
+    claimReviewedAt: { type: Date, default: null },
   },
   { timestamps: true }
 );

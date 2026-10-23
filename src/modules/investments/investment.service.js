@@ -4,6 +4,7 @@ import { creditTokens, debitAvailable, getOrCreateWallet, presentWallet, reverse
 import { Investment } from "./investment.model.js";
 import { ReferralPlan } from "./referral-plan.model.js";
 import { TokenSettings } from "./token-settings.model.js";
+import { findPayoutMethod, listPayoutMethods, publicPayoutMethod } from "../withdrawals/payout-methods.js";
 
 const MAX_LEVELS = 20;
 
@@ -192,6 +193,14 @@ export function presentInvestment(doc) {
     },
     referralPoolUsdt: doc.referralPoolUsdt,
     referralSettled: Boolean(doc.referralSettled),
+    claimStatus: doc.claimStatus || null,
+    claimRequestedAt: doc.claimRequestedAt || null,
+    claimPayoutMethod: doc.claimPayoutMethod || "",
+    claimPayout: doc.claimPayout || {},
+    claimNote: doc.claimNote || "",
+    claimTxHash: doc.claimTxHash || "",
+    claimRejectReason: doc.claimRejectReason || "",
+    claimReviewedAt: doc.claimReviewedAt || null,
   };
 }
 
@@ -276,6 +285,7 @@ export async function listInvestments(userId) {
     plans,
     planConfigured: plans.length > 0,
     lockedUsdt: lockedTotal(investments),
+    payoutMethods: listPayoutMethods().map(publicPayoutMethod),
   };
 }
 
@@ -342,7 +352,67 @@ export async function createInvestment(userId, body) {
   }
 }
 
-export async function claimInvestment(userId, id) {
+const PAYOUT_TEXT_LIMIT = 160;
+
+function cleanText(value, limit = PAYOUT_TEXT_LIMIT) {
+  return String(value || "").trim().slice(0, limit);
+}
+
+function collectPayout(method, payout) {
+  const source = payout && typeof payout === "object" ? payout : {};
+  const clean = {};
+  for (const field of method.fields) {
+    const value = cleanText(source[field.key], field.max || PAYOUT_TEXT_LIMIT);
+    if (field.required && value.length < (field.min || 1)) {
+      throw httpError(400, field.message || `Enter ${field.label}`);
+    }
+    if (value && field.check && !field.check(value)) {
+      throw httpError(400, field.message || `Enter a valid ${field.label}`);
+    }
+    if (value) {
+      clean[field.key] = value;
+    }
+  }
+  return clean;
+}
+
+function cleanTxHash(value) {
+  const hash = String(value || "").trim();
+  if (hash.length < 8 || hash.length > 120 || /\s/.test(hash)) {
+    throw httpError(400, "Enter the transaction hash");
+  }
+  return hash;
+}
+
+function claimUser(user) {
+  if (!user || typeof user !== "object" || !user._id) {
+    return null;
+  }
+  return {
+    id: user._id,
+    name: user.name || "",
+    email: user.email || "",
+    mobile: user.mobile || "",
+    country: user.country || "",
+    referralCode: user.referralCode || "",
+    isVerified: Boolean(user.isVerified),
+  };
+}
+
+function presentClaimRequest(doc, tokenRate) {
+  const investment = presentInvestment(doc);
+  const liveRate = tokenRate?.configured ? roundUsdt(tokenRate.tokensPerUsdt) : null;
+  const tokenValue = doc.status === "claimed" ? doc.tokensCredited : liveRate ? roundUsdt(doc.amountUsdt * liveRate) : null;
+  return {
+    ...investment,
+    user: claimUser(doc.user),
+    tokenRate: doc.status === "claimed" ? doc.tokensPerUsdt : liveRate,
+    tokenValue,
+    rateConfigured: doc.status === "claimed" ? true : Boolean(tokenRate?.configured),
+  };
+}
+
+export async function requestClaim(userId, id, body) {
   if (!mongoose.isValidObjectId(id)) {
     throw httpError(404, "Investment not found");
   }
@@ -352,7 +422,10 @@ export async function claimInvestment(userId, id) {
     throw httpError(404, "Investment not found");
   }
   if (existing.status === "claimed") {
-    return presentInvestment(existing);
+    throw httpError(400, "This purchase is already claimed");
+  }
+  if (existing.claimStatus === "pending") {
+    throw httpError(400, "Claim request is already pending");
   }
 
   const now = new Date();
@@ -361,6 +434,79 @@ export async function claimInvestment(userId, id) {
     throw httpError(400, days ? `This purchase can be claimed after ${days} days` : "This purchase is not ready to claim");
   }
 
+  const method = findPayoutMethod(body?.method);
+  if (!method) {
+    throw httpError(400, "Choose bank transfer, UPI, or wallet address");
+  }
+  const payout = collectPayout(method, body?.payout);
+
+  const requested = await Investment.findOneAndUpdate(
+    { _id: id, user: userId, status: "locked", claimStatus: { $ne: "pending" } },
+    {
+      $set: {
+        claimStatus: "pending",
+        claimRequestedAt: now,
+        claimPayoutMethod: method.id,
+        claimPayout: payout,
+        claimNote: cleanText(body?.note, 300),
+        claimRejectReason: "",
+        claimReviewedAt: null,
+      },
+    },
+    { new: true }
+  );
+
+  if (!requested) {
+    throw httpError(409, "This purchase cannot be claimed");
+  }
+
+  return presentInvestment(requested);
+}
+
+export async function listClaimRequests(status) {
+  const filter = { claimStatus: { $in: ["pending", "approved", "rejected"] } };
+  if (status === "pending" || status === "approved" || status === "rejected") {
+    filter.claimStatus = status;
+  }
+
+  const [docs, tokenRate] = await Promise.all([
+    Investment.find(filter)
+      .populate("user", "name email mobile country referralCode isVerified")
+      .sort({ claimRequestedAt: -1, createdAt: -1 }),
+    getTokenSettings(),
+  ]);
+
+  return {
+    requests: docs.map((doc) => presentClaimRequest(doc, tokenRate)),
+    tokenRate,
+  };
+}
+
+async function loadClaim(id) {
+  if (!mongoose.isValidObjectId(id)) {
+    throw httpError(404, "Claim request not found");
+  }
+  const doc = await Investment.findById(id).populate("user", "name email mobile country referralCode isVerified");
+  if (!doc || !doc.claimStatus) {
+    throw httpError(404, "Claim request not found");
+  }
+  return doc;
+}
+
+export async function approveClaimRequest(id, body) {
+  const existing = await loadClaim(id);
+  if (existing.status === "claimed" && existing.claimStatus === "approved") {
+    return presentClaimRequest(existing, await getTokenSettings());
+  }
+  if (existing.claimStatus !== "pending" || existing.status !== "locked") {
+    throw httpError(400, "This claim request cannot be approved");
+  }
+
+  const txHash = cleanTxHash(body?.txHash);
+  const userId = existing.user?._id || existing.user;
+  if (!userId) {
+    throw httpError(400, "User not found");
+  }
   const tokenRate = await getTokenSettings();
   const rate = roundUsdt(tokenRate.tokensPerUsdt);
   if (!tokenRate.configured || !(rate > 0)) {
@@ -372,47 +518,80 @@ export async function claimInvestment(userId, id) {
     throw httpError(400, "Token amount must be greater than 0");
   }
 
+  const now = new Date();
   const referralPoolUsdt = roundUsdt((existing.amountUsdt * (existing.referralPlan?.totalPercent || 0)) / 100);
   const claimed = await Investment.findOneAndUpdate(
-    { _id: id, user: userId, status: "locked", unlocksAt: { $lte: now } },
+    { _id: id, status: "locked", claimStatus: "pending" },
     {
       $set: {
         status: "claimed",
+        claimStatus: "approved",
         claimedAt: now,
         tokensPerUsdt: rate,
         tokensCredited,
         referralPoolUsdt,
         referralSettled: false,
+        claimTxHash: txHash,
+        claimReviewedAt: now,
+        claimRejectReason: "",
       },
     },
     { new: true }
-  );
+  ).populate("user", "name email mobile country referralCode isVerified");
 
   if (!claimed) {
-    const again = await Investment.findOne({ _id: id, user: userId });
-    if (again?.status === "claimed") {
-      return presentInvestment(again);
+    const again = await loadClaim(id);
+    if (again.status === "claimed") {
+      return presentClaimRequest(again, tokenRate);
     }
-    throw httpError(409, "This purchase cannot be claimed");
+    throw httpError(409, "This claim request cannot be approved");
   }
 
   try {
     await creditTokens({ userId, amount: tokensCredited });
   } catch (error) {
     await Investment.updateOne(
-      { _id: id, user: userId, status: "claimed" },
+      { _id: id, status: "claimed", claimStatus: "approved" },
       {
         $set: {
           status: "locked",
+          claimStatus: "pending",
           claimedAt: null,
           tokensPerUsdt: null,
           tokensCredited: null,
           referralPoolUsdt: null,
+          claimTxHash: "",
+          claimReviewedAt: null,
         },
       }
     );
     throw error;
   }
 
-  return presentInvestment(claimed);
+  return presentClaimRequest(claimed, tokenRate);
+}
+
+export async function rejectClaimRequest(id, body) {
+  const existing = await loadClaim(id);
+  if (existing.claimStatus !== "pending" || existing.status !== "locked") {
+    throw httpError(400, "This claim request cannot be rejected");
+  }
+
+  const rejected = await Investment.findOneAndUpdate(
+    { _id: id, status: "locked", claimStatus: "pending" },
+    {
+      $set: {
+        claimStatus: "rejected",
+        claimRejectReason: cleanText(body?.reason, 300),
+        claimReviewedAt: new Date(),
+      },
+    },
+    { new: true }
+  ).populate("user", "name email mobile country referralCode isVerified");
+
+  if (!rejected) {
+    throw httpError(409, "This claim request cannot be rejected");
+  }
+
+  return presentClaimRequest(rejected, await getTokenSettings());
 }
