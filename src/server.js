@@ -12,6 +12,9 @@ import { ensureDepositSettings } from "./modules/deposits/deposit-settings.model
 import withdrawalRoutes from "./modules/withdrawals/withdrawal.routes.js";
 import withdrawalAdminRoutes from "./modules/withdrawals/withdrawal-admin.routes.js";
 import cryptapiWebhookRoutes from "./modules/deposits/gateways/cryptapi.routes.js";
+import investmentRoutes from "./modules/investments/investment.routes.js";
+import investmentAdminRoutes from "./modules/investments/investment-admin.routes.js";
+import { ensureReferralPlans } from "./modules/investments/referral-plan.model.js";
 
 const app = express();
 const port = Number(process.env.PORT) || 5000;
@@ -46,6 +49,8 @@ app.use("/api/deposits", depositRoutes);
 app.use("/api/admin/deposits", depositAdminRoutes);
 app.use("/api/withdrawals", withdrawalRoutes);
 app.use("/api/admin/withdrawals", withdrawalAdminRoutes);
+app.use("/api/investments", investmentRoutes);
+app.use("/api/admin/investments", investmentAdminRoutes);
 app.use("/api/webhooks", cryptapiWebhookRoutes);
 
 app.use((err, _req, res, _next) => {
@@ -57,6 +62,7 @@ async function start() {
   await connectDb();
   await seedAdmin();
   await ensureDepositSettings();
+  await ensureReferralPlans();
   app.listen(port, () => {
     console.log(`API running on http://localhost:${port}`);
   });

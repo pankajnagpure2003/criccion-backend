@@ -229,6 +229,10 @@ export async function login(req, res) {
       return res.status(401).json({ message: "Invalid credentials" });
     }
 
+    if (user.isActive === false) {
+      return res.status(403).json({ message: "This account is deactivated" });
+    }
+
     if (!user.isVerified) {
       const mail = await issueOtp(user, "verify");
       return res.status(403).json({

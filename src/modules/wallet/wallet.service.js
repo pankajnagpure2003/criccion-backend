@@ -16,6 +16,7 @@ export function presentWallet(wallet) {
     balanceUsdt,
     heldUsdt,
     availableUsdt: roundUsdt(balanceUsdt - heldUsdt),
+    tokenBalance: roundUsdt(wallet?.tokenBalance || 0),
     currency: "USDT",
   };
 }
@@ -87,6 +88,75 @@ export async function creditWallet({ userId, amountUsdt, source, sourceId, note 
     }
     throw error;
   }
+}
+
+export async function debitAvailable({ userId, amountUsdt, source, sourceId, note = "" }) {
+  const amount = roundUsdt(amountUsdt);
+  if (!(amount > 0) || !source || !sourceId) {
+    throw fail(400, "Debit amount and source are required");
+  }
+
+  const sourceKey = String(sourceId);
+  const existing = await LedgerEntry.findOne({ source, sourceId: sourceKey });
+  if (existing) {
+    return { wallet: await getOrCreateWallet(userId), entry: existing, duplicate: true };
+  }
+
+  await getOrCreateWallet(userId);
+  const wallet = await Wallet.findOneAndUpdate(
+    {
+      user: userId,
+      $expr: {
+        $gte: [{ $subtract: ["$balanceUsdt", { $ifNull: ["$heldUsdt", 0] }] }, amount],
+      },
+    },
+    { $inc: { balanceUsdt: -amount } },
+    { new: true }
+  );
+
+  if (!wallet) {
+    throw fail(400, "Not enough USDT available");
+  }
+
+  try {
+    const entry = await LedgerEntry.create({
+      user: userId,
+      direction: "debit",
+      amountUsdt: amount,
+      balanceAfter: roundUsdt(wallet.balanceUsdt),
+      source,
+      sourceId: sourceKey,
+      note,
+    });
+    return { wallet, entry, duplicate: false };
+  } catch (error) {
+    await Wallet.updateOne({ user: userId }, { $inc: { balanceUsdt: amount } });
+    if (error.code === 11000) {
+      const entry = await LedgerEntry.findOne({ source, sourceId: sourceKey });
+      return { wallet: await getOrCreateWallet(userId), entry, duplicate: true };
+    }
+    throw error;
+  }
+}
+
+export async function reverseDebit({ userId, amountUsdt, source, sourceId }) {
+  const amount = roundUsdt(amountUsdt);
+  const sourceKey = String(sourceId);
+  await LedgerEntry.deleteOne({ source, sourceId: sourceKey });
+  await Wallet.updateOne({ user: userId }, { $inc: { balanceUsdt: amount } });
+  return getOrCreateWallet(userId);
+}
+
+export async function creditTokens({ userId, amount }) {
+  const tokens = roundUsdt(amount);
+  if (!(tokens > 0)) {
+    throw fail(400, "Token amount must be greater than 0");
+  }
+
+  const wallet = await getOrCreateWallet(userId);
+  wallet.tokenBalance = roundUsdt((wallet.tokenBalance || 0) + tokens);
+  await wallet.save();
+  return wallet;
 }
 
 export async function reserveFunds({ userId, amountUsdt, source, sourceId }) {

@@ -31,6 +31,12 @@ async function authenticateFromToken(req) {
     throw error;
   }
 
+  if (user.role === "user" && user.isActive === false) {
+    const error = new Error("This account is deactivated");
+    error.status = 401;
+    throw error;
+  }
+
   return user;
 }
 
