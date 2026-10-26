@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { forgotPassword, login, me, resendOtp, resetPassword, signup, verifyOtp } from "./auth.controller.js";
+import { forgotPassword, login, me, myTeam, resendOtp, resetPassword, signup, verifyOtp } from "./auth.controller.js";
 import { requireAuth } from "../../middleware/auth.middleware.js";
 
 const router = Router();
@@ -10,6 +10,7 @@ router.post("/resend-otp", resendOtp);
 router.post("/login", login);
 router.post("/forgot-password", forgotPassword);
 router.post("/reset-password", resetPassword);
+router.get("/team", requireAuth, myTeam);
 router.get("/me", requireAuth, me);
 
 export default router;

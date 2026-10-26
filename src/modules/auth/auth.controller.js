@@ -4,6 +4,7 @@ import { User } from "./auth.model.js";
 import { generateReferralCode } from "../../utils/generateReferralCode.js";
 import { generateOtp } from "../../utils/generateOtp.js";
 import { sendOtpEmail } from "../../utils/mailer.js";
+import { getReferralTree } from "./team.service.js";
 
 const OTP_MINUTES = 10;
 
@@ -340,5 +341,18 @@ export async function me(req, res) {
   } catch (error) {
     console.error(error);
     return res.status(500).json({ message: "Failed to load profile" });
+  }
+}
+
+export async function myTeam(req, res) {
+  try {
+    const team = await getReferralTree(req.user.id);
+    if (!team) {
+      return res.status(404).json({ message: "User not found" });
+    }
+    return res.json(team);
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: "Failed to load referral team" });
   }
 }

@@ -4,6 +4,7 @@ import mongoose from "mongoose";
 import { User } from "../auth/auth.model.js";
 import { Investment } from "../investments/investment.model.js";
 import { roundUsdt } from "../../utils/money.js";
+import { getReferralTree } from "../auth/team.service.js";
 
 const USER_FIELDS =
   "name firstName lastName email mobile country isVerified isActive referralCode referredBy createdAt manualTotalInvestmentUsdt";
@@ -164,6 +165,24 @@ export async function listUsers(req, res) {
   } catch (error) {
     console.error(error);
     return res.status(500).json({ message: "Failed to load users" });
+  }
+}
+
+export async function adminTeam(req, res) {
+  try {
+    const id = readUserId(req, res);
+    if (!id) {
+      return;
+    }
+
+    const team = await getReferralTree(id);
+    if (!team) {
+      return res.status(404).json({ message: "User not found" });
+    }
+    return res.json(team);
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: "Failed to load referral team" });
   }
 }
 
