@@ -59,16 +59,42 @@ app.use((err, _req, res, _next) => {
 });
 
 async function start() {
-  await connectDb();
-  await seedAdmin();
-  await ensureDepositSettings();
-  await ensureReferralPlans();
+  await initialize();
   app.listen(port, () => {
     console.log(`API running on http://localhost:${port}`);
   });
 }
 
-start().catch((error) => {
-  console.error("Failed to start server", error);
-  process.exit(1);
-});
+let initialization;
+
+function initialize() {
+  if (!initialization) {
+    initialization = Promise.resolve()
+      .then(connectDb)
+      .then(seedAdmin)
+      .then(ensureDepositSettings)
+      .then(ensureReferralPlans)
+      .catch((error) => {
+        initialization = undefined;
+        throw error;
+      });
+  }
+  return initialization;
+}
+
+export default async function handler(req, res) {
+  try {
+    await initialize();
+    return app(req, res);
+  } catch (error) {
+    console.error("Failed to initialize API request", error);
+    return res.status(500).json({ message: "API initialization failed" });
+  }
+}
+
+if (process.env.VERCEL !== "1") {
+  start().catch((error) => {
+    console.error("Failed to start server", error);
+    process.exit(1);
+  });
+}
